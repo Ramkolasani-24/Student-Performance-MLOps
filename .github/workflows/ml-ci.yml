@@ -1,3 +1,4 @@
+
 name: Student Performance ML CI
 
 on:
@@ -15,28 +16,35 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Get repository code
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Set up Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # 3. Install dependencies
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
+      # 4. Train and evaluate model
       - name: Train and evaluate model
         run: python src/train_model.py
 
+      # 5. Validate model quality
       - name: Validate model quality
         run: python quality_gate.py
 
+      # 6. Test Flask API
       - name: Test Flask API
         run: |
           python -c "import joblib; import os; assert os.path.exists('artifacts/student_performance_model.joblib')"
           python -c "from app import app, load_model; load_model(); client = app.test_client(); assert client.get('/health').status_code == 200; r = client.post('/predict', json={'gender':'female','race_ethnicity':'group B','parental_level_of_education':'some college','lunch':'standard','test_preparation_course':'completed'}); print(r.status_code, r.get_json()); assert r.status_code == 200"
 
+      # 7. Upload validated release candidate
       - name: Upload validated release candidate
         uses: actions/upload-artifact@v4
         with:
@@ -48,3 +56,53 @@ jobs:
             requirements.txt
           if-no-files-found: error
           retention-days: 7
+
+      # 8. Build Docker image
+      - name: Build Docker image
+        run: docker build -t student-performance-ml:${{ github.sha }} .
+
+      # 9. Start Docker container
+      - name: Start Docker container
+        run: |
+          docker run -d \
+            --name student-performance-container \
+            -p 5000:5000 \
+            student-performance-ml:${{ github.sha }}
+
+      # 10. Test container health
+      - name: Test container health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:5000/health; then
+              echo "Health check passed"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Health check failed"
+          docker logs student-performance-container
+          exit 1
+
+      # 11. Test prediction endpoint inside Docker
+      - name: Test Docker prediction endpoint
+        run: |
+          curl --fail --show-error \
+            -X POST http://localhost:5000/predict \
+            -H "Content-Type: application/json" \
+            -d '{
+              "gender": "female",
+              "race_ethnicity": "group B",
+              "parental_level_of_education": "some college",
+              "lunch": "standard",
+              "test_preparation_course": "completed"
+            }'
+
+      # 12. Show logs if any step fails
+      - name: Show Docker logs
+        if: failure()
+        run: docker logs student-performance-container || true
+
+      # 13. Clean up container
+      - name: Clean up Docker container
+        if: always()
+        run: docker rm -f student-performance-container || true
