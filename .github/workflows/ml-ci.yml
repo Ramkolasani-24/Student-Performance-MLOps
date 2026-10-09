@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 jobs:
-  train:
+  train-and-test:
     runs-on: ubuntu-latest
 
     steps:
@@ -28,13 +28,23 @@ jobs:
 
       - name: Train and evaluate model
         run: python src/train_model.py
+
       - name: Validate model quality
         run: python quality_gate.py
 
-      - name: Upload model artifacts
+      - name: Test Flask API
+        run: |
+          python -c "import joblib; import os; assert os.path.exists('artifacts/student_performance_model.joblib')"
+          python -c "from app import app, load_model; load_model(); client = app.test_client(); assert client.get('/health').status_code == 200; r = client.post('/predict', json={'gender':'female','race_ethnicity':'group B','parental_level_of_education':'some college','lunch':'standard','test_preparation_course':'completed'}); print(r.status_code, r.get_json()); assert r.status_code == 200"
+
+      - name: Upload validated release candidate
         uses: actions/upload-artifact@v4
         with:
-          name: student-performance-model
-          path: artifacts/
+          name: student-performance-release-candidate
+          path: |
+            app.py
+            artifacts/student_performance_model.joblib
+            artifacts/metrics.json
+            requirements.txt
           if-no-files-found: error
           retention-days: 7
